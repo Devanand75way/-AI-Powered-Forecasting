@@ -1,0 +1,9 @@
+# sales-forecast-project/backend/requirements.txt
+flask
+flask-cors
+pandas
+numpy
+scikit-learn
+xgboost
+joblib
+gunicorn

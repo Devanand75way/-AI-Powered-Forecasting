@@ -1,63 +1,72 @@
-# sales-forecast-project/backend/app.py
 from flask import Flask, request, jsonify
+import traceback
 from flask_cors import CORS
-import pandas as pd
-import joblib
+from models.predictors import AdvancedDemandPredictor
 
-from models.sales_forecast_model import SalesForecastModel
-from models.preprocessing import preprocess_data
-
+# Flask API Setup
 app = Flask(__name__)
-CORS(app)
+demand_predictor = AdvancedDemandPredictor()
 
-@app.route('/api/predict', methods=['POST'])
-def predict_sales():
+@app.route('/update_market_insights', methods=['POST'])
+def update_market_insights():
+    """
+    Endpoint to update market insights dynamically
+    """
     try:
-        # Load data and preprocess
-        data = request.json['data']
-        df = pd.DataFrame(data)
-        preprocessed_df, features = preprocess_data(df)
+        market_insights = request.json
         
-        # Load pre-trained model
-        model = joblib.load('ml_model/saved_models/sales_forecast_model.pkl')
+        # Validate input
+        if not isinstance(market_insights, dict):
+            return jsonify({'error': 'Invalid market insights format'}), 400
         
-        # Make predictions
-        predictions = model.predict(preprocessed_df[features])
+        # Update market insights in the predictor
+        demand_predictor.market_insight_predictor.update_market_insights(market_insights)
         
         return jsonify({
-            'predictions': predictions.tolist(),
-            'success': True
+            'status': 'Market insights updated successfully',
+            'received_insights': market_insights
         })
     except Exception as e:
-        return jsonify({'error': str(e), 'success': False}), 500
-
-@app.route('/api/train', methods=['POST'])
-def train_model():
-    try:
-        # Load training data
-        data = request.json['data']
-        df = pd.DataFrame(data)
-        
-        # Preprocess data
-        preprocessed_df, features = preprocess_data(df)
-        
-        # Initialize and train model
-        sales_model = SalesForecastModel(preprocessed_df, features, 'Sales')
-        sales_model.split_data()
-        sales_model.train_random_forest()
-        
-        # Evaluate model
-        performance = sales_model.evaluate_model()
-        
-        # Save model
-        joblib.dump(sales_model.model, 'ml_model/saved_models/sales_forecast_model.pkl')
-        
         return jsonify({
-            'performance': performance,
-            'success': True
-        })
+            'error': str(e),
+            'details': 'An error occurred while updating market insights'
+        }), 500
+
+@app.route('/predict_future_demand', methods=['POST'])
+def predict_future_demand():
+    try:
+        # Get input data from request
+        input_data = request.json.get('demandData', {})
+        market_insights = request.json.get('marketInsights', {})
+        
+        # Validate input data
+        required_fields = [
+            'Segment', 'Country', 'City', 'State', 'Region', 
+            'Category', 'Sub-Category', 'Product Name', 
+            'Sales', 'Discount'
+        ]
+        
+        for field in required_fields:
+            if field not in input_data:
+                return jsonify({'error': f'Missing required field: {field}'}), 400
+        
+        # Predict future demand
+        prediction = demand_predictor.predict_future_demand(
+            input_data, 
+            market_insights
+        )
+        
+        return jsonify(prediction)
+    
     except Exception as e:
-        return jsonify({'error': str(e), 'success': False}), 500
+        # Log the full traceback for debugging
+        print(traceback.format_exc())
+        return jsonify({
+            'error': str(e),
+            'details': 'An error occurred during prediction',
+            'traceback': traceback.format_exc()
+        }), 500
 
 if __name__ == '__main__':
-    app.run(debug=True)
+    CORS(app, resources={r"/*": {"origins": "*"}})
+    app.run(debug=True, port=5000)

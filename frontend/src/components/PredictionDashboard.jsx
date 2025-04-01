@@ -360,7 +360,7 @@ function DemandPredictionPage() {
                           </Tooltip>
                         </Typography>
                         <Typography variant="h6" color="primary">
-                          {predictionResult.base_demand.toFixed(2)}
+                          {predictionResult.base_demand}
                         </Typography>
                       </Grid>
                       
@@ -374,7 +374,7 @@ function DemandPredictionPage() {
                           </Tooltip>
                         </Typography>
                         <Typography variant="h6" color="secondary">
-                          {predictionResult.projected_demand.toFixed(2)}
+                          {predictionResult.projected_demand}
                         </Typography>
                       </Grid>
                       
@@ -398,7 +398,7 @@ function DemandPredictionPage() {
                           </Tooltip>
                         </Typography>
                         <Typography variant="h6">
-                          {predictionResult.recommended_stock} units
+                          {predictionResult.recommended_stock}
                         </Typography>
                       </Grid>
                     </Grid>
@@ -423,7 +423,7 @@ function DemandPredictionPage() {
                       <Grid item xs={12} sm={6}>
                         <Typography variant="subtitle1">Growth Rate</Typography>
                         <Typography variant="h6" color="primary">
-                          {(predictionResult.market_insights.growth_rate * 100).toFixed(2)}%
+                          {(predictionResult.market_insights.growth_rate)}
                         </Typography>
                       </Grid>
                       

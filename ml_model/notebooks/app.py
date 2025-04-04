@@ -8,6 +8,7 @@ from sklearn.ensemble import RandomForestRegressor
 import base64
 from io import BytesIO
 import matplotlib
+<<<<<<< HEAD
 from textblob import TextBlob
 matplotlib.use('Agg')
 import os
@@ -17,12 +18,25 @@ app = Flask(__name__)
 CORS(app)
 
 sales_data  = pd.read_csv('ml_model/data/smartphone_sales_updated.csv')
+=======
+matplotlib.use('Agg')
+import os
+from prophet import Prophet
+
+app = Flask(__name__) 
+
+sales_data  = pd.read_csv('ml_model/data/smartphone_sales_preprocess_dt.csv')
+>>>>>>> f56f21470dc1d25eaa4e68c444738fb96c9d2ff2
 
 
 # Load the actual dataset
 def load_dataset():
     # dataset 
+<<<<<<< HEAD
     dataset_path = 'ml_model/data/smartphone_sales_updated.csv'
+=======
+    dataset_path = 'ml_model/data/smartphone_sales_preprocess_dt.csv'
+>>>>>>> f56f21470dc1d25eaa4e68c444738fb96c9d2ff2
     
     # Check if file exists
     if not os.path.exists(dataset_path):
@@ -58,7 +72,10 @@ def get_product_name(row):
 @app.route('/sales-analysis-by-date', methods=['POST'])
 def sales_analysis_by_date():
     data = request.get_json()
+<<<<<<< HEAD
     print("sales_analysis_by_date", data)
+=======
+>>>>>>> f56f21470dc1d25eaa4e68c444738fb96c9d2ff2
     start_date = data.get('start_date')
     end_date = data.get('end_date')
     
@@ -151,12 +168,30 @@ def sales_analysis_by_product():
         # Best-selling months for this product
         best_months = monthly_sales.sort_values('Actual Sales', ascending=False).head(3)
         
+<<<<<<< HEAD
+=======
+        # Create graph visualization
+        fig, ax = plt.subplots(figsize=(12, 6))
+        
+        # Monthly sales trend
+        sns.lineplot(x='Month', y='Actual Sales', data=monthly_sales, marker='o', ax=ax)
+        ax.set_title(f'Sales Trend for {product_name}')
+        ax.set_xticklabels(ax.get_xticklabels(), rotation=45, ha='right')
+        
+        plt.tight_layout()
+        graph_image = plot_to_base64(fig)
+        
+>>>>>>> f56f21470dc1d25eaa4e68c444738fb96c9d2ff2
         # Prepare response
         response = {
             "product_name": product_name,
             "total_sales": filtered_df['Actual Sales'].sum(),
             "monthly_trends": monthly_sales.to_dict('records'),
             "best_selling_months": best_months.to_dict('records'),
+<<<<<<< HEAD
+=======
+            # "graph": graph_image
+>>>>>>> f56f21470dc1d25eaa4e68c444738fb96c9d2ff2
         }
         
         return jsonify(response)
@@ -248,7 +283,11 @@ def sales_forecast():
         # Get the last 12 months of data for training
         twelve_months_ago = today - pd.DateOffset(months=12)
         training_df = filtered_df[(filtered_df['Date'] >= twelve_months_ago) & (filtered_df['Date'] <= today)].copy()
+<<<<<<< HEAD
         print("Training Date", training_df)
+=======
+        
+>>>>>>> f56f21470dc1d25eaa4e68c444738fb96c9d2ff2
         if training_df.empty:
             return jsonify({"error": "Insufficient historical data for the last 12 months"}), 400
         
@@ -314,6 +353,54 @@ def sales_forecast():
         historical_monthly['Date'] = pd.to_datetime(historical_monthly['Year'].astype(str) + '-' + historical_monthly['Month'].astype(str) + '-01')
         historical_monthly['Actual Sales'] = historical_monthly['Units Sold'] 
         
+<<<<<<< HEAD
+=======
+        # Create visualization
+        fig, ax = plt.subplots(figsize=(12, 6))
+        
+        # Historical data
+        sns.lineplot(
+            x='Date', 
+            y='Actual Sales', 
+            data=historical_monthly, 
+            marker='o', 
+            label='Historical Sales (Last 12 Months)',
+            ax=ax
+        )
+        
+        # Forecast data
+        sns.lineplot(
+            x='Date', 
+            y='Predicted Sales', 
+            data=forecast_df, 
+            marker='o', 
+            color='red', 
+            label='Forecasted Sales',
+            ax=ax
+        )
+        
+        # Add vertical line to separate historical and forecast
+        ax.axvline(x=today, color='grey', linestyle='--')
+        
+        # Customize title to include RAM and Memory
+        title = f'Sales Forecast for {product_name}'
+        if ram:
+            title += f' ({ram}'
+            if memory:
+                title += f', {memory})'
+            else:
+                title += ')'
+        elif memory:
+            title += f' ({memory})'
+        
+        ax.set_title(title)
+        ax.set_xlabel('Date')
+        ax.set_ylabel('Sales')
+        
+        plt.tight_layout()
+        graph_image = plot_to_base64(fig)
+        
+>>>>>>> f56f21470dc1d25eaa4e68c444738fb96c9d2ff2
         # Calculate impact of external factors
         impact = {}
         feature_importances = dict(zip(feature_columns, model.feature_importances_))
@@ -383,6 +470,7 @@ def sales_forecast():
         return jsonify({"error": str(e)}), 500
 
 
+<<<<<<< HEAD
 @app.route('/analyze_sentiment', methods=['POST'])
 def analyze_sentiment():
     # Get feedback from the request
@@ -399,13 +487,27 @@ def analyze_sentiment():
     return jsonify({'average_sentiment': round(average_sentiment, 2)})
 
 
+=======
+>>>>>>> f56f21470dc1d25eaa4e68c444738fb96c9d2ff2
 # Add a route to check if the API is working
 @app.route('/', methods=['GET'])
 def index():
     return jsonify({
         "status": "API is running",
+<<<<<<< HEAD
     })
 
 if __name__ == '__main__':
     CORS(app, resources={r"/api/*": {"origins": "*"}})
+=======
+        "endpoints": [
+            "/sales-analysis-by-date", 
+            "/sales-analysis-by-product", 
+            "/sales-forecast"
+        ],
+        "dataset_info": "Using actual dataset with 13,000 rows"
+    })
+
+if __name__ == '__main__':
+>>>>>>> f56f21470dc1d25eaa4e68c444738fb96c9d2ff2
     app.run(debug=True)

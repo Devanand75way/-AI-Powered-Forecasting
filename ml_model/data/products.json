@@ -1,0 +1,60 @@
+{
+     "products": [
+       {
+         "name": "Apple iPhone 14 Plus",
+         "price": 682.99,
+         "sales": 2500
+       },
+       {
+          "name": "Apple iPhone 15 Plus",
+          "price": 824.99,
+          "sales": 2500
+        },
+        {
+          "name": "Apple iPhone",
+          "price": 732.99,
+          "sales": 1800
+        },
+        {
+          "name": "Apple iPhone 15 Pro",
+          "price": 502.45,
+          "sales": 1500
+        },
+        {
+          "name": "Apple iPhone 15 Plus",
+          "price": 514.99,
+          "sales": 1800 
+        },
+        {
+         "name": "Samsung Galaxy S23",
+         "price": 1099.99,
+         "sales": 1800
+       },
+       {
+         "name": "Samsung Galaxy S22",
+         "price": 999.99,
+         "sales": 1500
+       },
+       {
+         "name": "Google Pixel 8",
+         "price": 345.99,
+         "sales": 950
+       },
+       {
+         "name": "OnePlus 12 5G",
+         "price": 26.99,
+         "sales": 1200
+       },
+       {
+          "name": "OnePlus 11 5G",
+          "price": 25.99,
+          "sales": 1200
+        },  
+        {
+          "name": "Xiaomi 14",
+          "price": 699.99,
+          "sales": 1000
+        }
+     ]
+   }
+   

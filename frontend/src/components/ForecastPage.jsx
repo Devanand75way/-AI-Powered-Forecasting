@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   Box, 
   Paper, 
@@ -20,7 +20,14 @@ import {
   CardContent,
   Autocomplete,
   Alert,
-  Snackbar
+  Snackbar,
+  Table,
+  TableBody,
+  TableCell,
+  TableContainer,
+  TableHead,
+  TableRow,
+  CircularProgress
 } from '@mui/material';
 import { motion } from 'framer-motion';
 import { 
@@ -50,13 +57,141 @@ const ForecastPage = () => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [productDetails, setProductDetails] = useState(null);
+  
+  // New state variables for dynamic competitor activity
+  const [competitors, setCompetitors] = useState([]);
+  const [loadingCompetitors, setLoadingCompetitors] = useState(false);
+  
+  // New state variables for market sentiment
+  const [productFeedback, setProductFeedback] = useState([]);
+  const [loadingFeedback, setLoadingFeedback] = useState(false);
+  const [selectedProduct, setSelectedProduct] = useState('');
 
   const productOptions = [
-    'iPhone 14','iPhone 15', 'Samsung Galaxy S22', 'Google Pixel 8', 'OnePlus 12','OnePlus 11' ,'Xiaomi 14'
+    'Apple iPhone 14 Plus','Apple iPhone 15 Plus', 'Samsung Galaxy S22', 'Google Pixel 8', 'OnePlus 12 5G','OnePlus 11 5G' ,'Xiaomi 14'
   ];
   
   const ramOptions = ['6GB', '8GB', '16GB'];
-  const memoryOptions = ['256GB', '512GB'];
+  const memoryOptions = ['128GB','256GB', '512GB'];
+
+  // Load competitors when product changes
+  useEffect(() => {
+    if (productName) {
+      fetchCompetitors(productName);
+    }
+  }, [productName]);
+
+  const fetchCompetitors = async (product) => {
+    setLoadingCompetitors(true);
+    try {
+      // In a real app, this would be an API call to get competitor data
+      // For this example, we'll simulate the API response
+      const response = await axios.get(`http://localhost:5000/get_competitor_data?q=${product}`);
+      console.log(response.data.data);
+      setCompetitors(response.data.data.competitors);
+      
+      // Calculate an overall competitor activity score
+      const calculatedScore = calculateCompetitorScore(response.data.data.competitors);
+      setCompetitorActivity(calculatedScore);
+      
+    } catch (error) {
+      console.error('Error fetching competitors:', error);
+      setError('Failed to load competitor data');
+    } finally {
+      setLoadingCompetitors(false);
+    }
+  };
+
+  // Function to calculate competitor score based on available data
+  const calculateCompetitorScore = (competitorList) => {
+    console.log('Calculating', competitorList);
+    if (!competitorList || competitorList.length === 0) return 0.0;
+  
+    // Define weights
+    const weights = {
+      priceDifference: 0.3,
+      googleTrends: 0.3,
+    };
+  
+    const competitorScores = competitorList.map(competitor => {
+      let totalScore = 0;
+      let totalWeight = 0;
+  
+      // Safe parse of ourPrice
+      const ourPrice = parseFloat(competitor.ourPrice);
+      const compPrice = parseFloat(competitor.price);
+  
+      //  Price difference score (only if both prices are valid numbers)
+      if (!isNaN(ourPrice) && !isNaN(compPrice) && ourPrice > 0) {
+        const priceDiff = (ourPrice - compPrice) / ourPrice;
+        const priceScore = Math.min(Math.max(priceDiff + 0.5, 0), 1); // normalized
+        totalScore += priceScore * weights.priceDifference;
+        totalWeight += weights.priceDifference;
+      }
+  
+      //  Google Trends score (safe parse)
+      const trendsScore = parseFloat(competitor.googleTrends);
+      if (!isNaN(trendsScore)) {
+        totalScore += (trendsScore / 100) * weights.googleTrends;
+        totalWeight += weights.googleTrends;
+      }
+  
+      // //  Ad Spend score (optional)
+      // if (!isNaN(parseFloat(competitor.adSpend))) {
+      //   totalScore += parseFloat(competitor.adSpend) * weights.adSpend;
+      //   totalWeight += weights.adSpend;
+      // }  
+  
+      // //  Social Media score (optional)
+      // if (!isNaN(parseFloat(competitor.socialMediaScore))) {
+      //   totalScore += parseFloat(competitor.socialMediaScore) * weights.socialMediaScore;
+      //   totalWeight += weights.socialMediaScore;
+      // }
+  
+      // Fallback score
+      return totalWeight > 0 ? totalScore / totalWeight : 0.5;
+    });
+  
+    const avgScore = competitorScores.reduce((sum, score) => sum + score, 0) / competitorScores.length;
+    return parseFloat(avgScore.toFixed(2));
+  };
+  
+
+  // Fetch product feedback for market sentiment
+  const handleFetchProductFeedback = async () => {
+    if (!selectedProduct) return;
+    
+    setLoadingFeedback(true);
+    try {
+      // Real API call to get product feedback
+      const response = await axios.get(`http://localhost:5000/get_product_reviews?q=${selectedProduct}`);
+      
+      // Process the reviews from the response
+      const reviewData = response.data.reviews.map(review => ({
+        text: review.content,
+        // We'll calculate sentiment on frontend for now
+        // In a real app, the API might provide sentiment scores
+        sentiment: Math.random() * 0.6 + 0.2 // Dummy sentiment between 0.2 and 0.8
+      }));
+      
+      setProductFeedback(reviewData);
+      
+      // Calculate average sentiment
+      const avgSentiment = reviewData.reduce((sum, item) => sum + item.sentiment, 0) / 
+                          reviewData.length;
+      
+      setMarketSentiment(parseFloat(avgSentiment.toFixed(2)));
+      
+      // Add fetched feedback to feedbackList for display
+      setFeedbackList(reviewData.map(item => item.text));
+      
+    } catch (error) {
+      console.error('Error fetching product feedback:', error);
+      setError('Failed to load product feedback');
+    } finally {
+      setLoadingFeedback(false);
+    }
+  };
 
   const handleAddFeedback = () => {
     if (feedback.trim()) {
@@ -74,12 +209,6 @@ const ForecastPage = () => {
     const newList = [...feedbackList];
     newList.splice(index, 1);
     setFeedbackList(newList);
-  };
-
-  const handleCalculateCompetitorActivity = () => {
-    // Simulate competitor activity calculation
-    const newValue = Math.min(Math.random() * 0.3 + competitorActivity, 1);
-    setCompetitorActivity(parseFloat(newValue.toFixed(2)));
   };
 
   const calculateMarketSentiment = async () => {
@@ -229,31 +358,72 @@ const ForecastPage = () => {
             </Divider>
           </Grid>
           
-          <Grid item xs={12} md={6}>
+          {/* Updated Competitor Activity Calculator */}
+          <Grid item xs={12} md={8}>
             <Card variant="outlined" sx={{ mb: 2 }}>
               <CardContent>
                 <Typography variant="h6" gutterBottom>
                   Competitor Activity Calculator
                 </Typography>
-                <Typography gutterBottom>Current Value: {competitorActivity}</Typography>
+                <Typography gutterBottom>
+                  Current Value: {competitorActivity} {loadingCompetitors && <CircularProgress size={16} sx={{ ml: 1 }} />}
+                </Typography>
                 <Slider
                   value={competitorActivity}
                   min={0}
                   max={1}
-                  step={0.1}
+                  step={0.01}
                   onChange={(e, newValue) => setCompetitorActivity(newValue)}
                   valueLabelDisplay="auto"
-                  marks
+                  marks={[
+                    { value: 0, label: 'Low' },
+                    { value: 0.5, label: 'Medium' },
+                    { value: 1, label: 'High' }
+                  ]}
                   sx={{ mb: 2 }}
                 />
-                <Button variant="outlined" onClick={handleCalculateCompetitorActivity}>
-                  Calculate Competition
+                
+                {competitors && (
+                  <TableContainer component={Paper} variant="outlined" sx={{ mb: 2 }}>
+                    <Table size="small">
+                      <TableHead>
+                        <TableRow>
+                          <TableCell>Competitor</TableCell>
+                          <TableCell align="right">Price</TableCell>
+                          <TableCell align="right">Our Price</TableCell>
+                          <TableCell align="right">Google Trends</TableCell>
+                          <TableCell align="right">Source</TableCell>
+                        </TableRow>
+                      </TableHead>
+                      <TableBody>
+                        {competitors.map((competitor, index) => (
+                          <TableRow key={index}>
+                            <TableCell component="th" scope="row">
+                              {competitor.name}
+                            </TableCell>
+                            <TableCell align="right">${competitor.price}</TableCell>
+                            <TableCell align="right">${competitor.ourPrice}</TableCell>
+                            <TableCell align="center">{competitor.googleTrends}%</TableCell>
+                            <TableCell align="right">{competitor.source}</TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </TableContainer>
+                )}
+                
+                <Button 
+                  variant="outlined" 
+                  onClick={() => fetchCompetitors(productName)}
+                  disabled={!productName || loadingCompetitors}
+                >
+                  {loadingCompetitors ? 'Loading...' : 'Analyze Competition'}
                 </Button>
               </CardContent>
             </Card>
           </Grid>
           
-          <Grid item xs={12} md={6}>
+          {/* <Grid item xs={12} md={6}>
             <Card variant="outlined" sx={{ mb: 2 }}>
               <CardContent>
                 <Typography variant="h6" gutterBottom>
@@ -274,15 +444,47 @@ const ForecastPage = () => {
                 />
               </CardContent>
             </Card>
-          </Grid>
+          </Grid> */}
+         
           
+          {/* Updated Market Sentiment Calculator */}
           <Grid item xs={12} md={6}>
             <Card variant="outlined" sx={{ mb: 2 }}>
               <CardContent>
                 <Typography variant="h6" gutterBottom>
                   Market Sentiment Calculator
                 </Typography>
-                <Typography gutterBottom>Current Sentiment: {marketSentiment.toFixed(2)}</Typography>
+                <Typography gutterBottom>
+                  Current Sentiment: {marketSentiment.toFixed(2)} {loadingFeedback && <CircularProgress size={16} sx={{ ml: 1 }} />}
+                </Typography>
+                
+                <Grid container spacing={2} sx={{ mb: 2 }}>
+                  <Grid item xs={12} md={8}>
+                    <Autocomplete
+                      options={productOptions}
+                      value={selectedProduct}
+                      onChange={(event, newValue) => {
+                        setSelectedProduct(newValue);
+                      }}
+                      renderInput={(params) => <TextField {...params} label="Select Product for Feedback" fullWidth />}
+                    />
+                  </Grid>
+                  <Grid item xs={12} md={4}>
+                    <Button 
+                      variant="outlined" 
+                      onClick={handleFetchProductFeedback}
+                      disabled={!selectedProduct || loadingFeedback}
+                      fullWidth
+                      sx={{ height: '100%' }}
+                    >
+                      Fetch Feedback
+                    </Button>
+                  </Grid>
+                </Grid>
+                
+                <Divider sx={{ my: 2 }}>
+                  <Chip label="Add Custom Feedback" size="small" />
+                </Divider>
                 
                 <TextField
                   label="Product Feedback"
@@ -298,7 +500,7 @@ const ForecastPage = () => {
                   variant="outlined" 
                   onClick={handleAddFeedback}
                   disabled={!feedback.trim()}
-                  sx={{ mr: 2 , mb: 2 }}
+                  sx={{ mr: 2, mb: 2 }}
                 >
                   Add Feedback
                 </Button>
@@ -308,7 +510,7 @@ const ForecastPage = () => {
                   disabled={feedbackList.length === 0}
                   sx={{ mb: 2 }}
                 >
-                 Calculate
+                 Calculate Sentiment
                 </Button>
                 
                 <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
@@ -453,7 +655,6 @@ const ForecastPage = () => {
         <Alert onClose={handleCloseError} severity="error" sx={{ width: '100%' }}>
           {error}
         </Alert>
-
       </Snackbar>
     </motion.div>
   );

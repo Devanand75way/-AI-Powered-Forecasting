@@ -8,36 +8,24 @@ from sklearn.ensemble import RandomForestRegressor
 import base64
 from io import BytesIO
 import matplotlib
-<<<<<<< HEAD
 from textblob import TextBlob
-matplotlib.use('Agg')
+from serpapi import GoogleSearch
 import os
+import json
 from flask_cors import CORS
 
 app = Flask(__name__) 
 CORS(app)
 
 sales_data  = pd.read_csv('ml_model/data/smartphone_sales_updated.csv')
-=======
-matplotlib.use('Agg')
-import os
-from prophet import Prophet
-
-app = Flask(__name__) 
-
-sales_data  = pd.read_csv('ml_model/data/smartphone_sales_preprocess_dt.csv')
->>>>>>> f56f21470dc1d25eaa4e68c444738fb96c9d2ff2
+API_KEY = "54689b480842147086ac6f6b033f096ff9a76197e528284d3ee8cbb66e1de587"
 
 
 # Load the actual dataset
 def load_dataset():
-    # dataset 
-<<<<<<< HEAD
+
     dataset_path = 'ml_model/data/smartphone_sales_updated.csv'
-=======
-    dataset_path = 'ml_model/data/smartphone_sales_preprocess_dt.csv'
->>>>>>> f56f21470dc1d25eaa4e68c444738fb96c9d2ff2
-    
+
     # Check if file exists
     if not os.path.exists(dataset_path):
         raise FileNotFoundError(f"Dataset file not found at {dataset_path}")
@@ -72,10 +60,8 @@ def get_product_name(row):
 @app.route('/sales-analysis-by-date', methods=['POST'])
 def sales_analysis_by_date():
     data = request.get_json()
-<<<<<<< HEAD
     print("sales_analysis_by_date", data)
-=======
->>>>>>> f56f21470dc1d25eaa4e68c444738fb96c9d2ff2
+
     start_date = data.get('start_date')
     end_date = data.get('end_date')
     
@@ -107,21 +93,6 @@ def sales_analysis_by_date():
         best_month = monthly_sales.loc[monthly_sales['Actual Sales'].idxmax()]['Month']
         worst_month = monthly_sales.loc[monthly_sales['Actual Sales'].idxmin()]['Month']
         
-        # Create graph visualization
-        fig, ax = plt.subplots(2, 1, figsize=(12, 10))
-        
-        # Product sales
-        sns.barplot(x='Product', y='Actual Sales', data=product_sales, ax=ax[0])
-        ax[0].set_title('Total Sales by Product')
-        ax[0].set_xticklabels(ax[0].get_xticklabels(), rotation=45, ha='right')
-        
-        # Monthly trends
-        sns.lineplot(x='Month', y='Actual Sales', data=monthly_sales, marker='o', ax=ax[1])
-        ax[1].set_title('Monthly Sales Trends')
-        ax[1].set_xticklabels(ax[1].get_xticklabels(), rotation=45, ha='right')
-        
-        plt.tight_layout()
-        graph_image = plot_to_base64(fig)
         
         # Prepare response
         response = {
@@ -168,32 +139,14 @@ def sales_analysis_by_product():
         # Best-selling months for this product
         best_months = monthly_sales.sort_values('Actual Sales', ascending=False).head(3)
         
-<<<<<<< HEAD
-=======
-        # Create graph visualization
-        fig, ax = plt.subplots(figsize=(12, 6))
+
         
-        # Monthly sales trend
-        sns.lineplot(x='Month', y='Actual Sales', data=monthly_sales, marker='o', ax=ax)
-        ax.set_title(f'Sales Trend for {product_name}')
-        ax.set_xticklabels(ax.get_xticklabels(), rotation=45, ha='right')
-        
-        plt.tight_layout()
-        graph_image = plot_to_base64(fig)
-        
->>>>>>> f56f21470dc1d25eaa4e68c444738fb96c9d2ff2
-        # Prepare response
         response = {
             "product_name": product_name,
             "total_sales": filtered_df['Actual Sales'].sum(),
             "monthly_trends": monthly_sales.to_dict('records'),
             "best_selling_months": best_months.to_dict('records'),
-<<<<<<< HEAD
-=======
-            # "graph": graph_image
->>>>>>> f56f21470dc1d25eaa4e68c444738fb96c9d2ff2
         }
-        
         return jsonify(response)
     
     except Exception as e:
@@ -283,11 +236,7 @@ def sales_forecast():
         # Get the last 12 months of data for training
         twelve_months_ago = today - pd.DateOffset(months=12)
         training_df = filtered_df[(filtered_df['Date'] >= twelve_months_ago) & (filtered_df['Date'] <= today)].copy()
-<<<<<<< HEAD
-        print("Training Date", training_df)
-=======
-        
->>>>>>> f56f21470dc1d25eaa4e68c444738fb96c9d2ff2
+
         if training_df.empty:
             return jsonify({"error": "Insufficient historical data for the last 12 months"}), 400
         
@@ -315,6 +264,7 @@ def sales_forecast():
         # Train a model
         model = RandomForestRegressor(n_estimators=100, random_state=42)
         model.fit(X, y)
+
         
         # Generate forecast dates - starting from today (or end_date if provided and it's in the future)
         forecast_start = max(today, pd.to_datetime(end_date)) if end_date else today
@@ -353,35 +303,7 @@ def sales_forecast():
         historical_monthly['Date'] = pd.to_datetime(historical_monthly['Year'].astype(str) + '-' + historical_monthly['Month'].astype(str) + '-01')
         historical_monthly['Actual Sales'] = historical_monthly['Units Sold'] 
         
-<<<<<<< HEAD
-=======
-        # Create visualization
-        fig, ax = plt.subplots(figsize=(12, 6))
-        
-        # Historical data
-        sns.lineplot(
-            x='Date', 
-            y='Actual Sales', 
-            data=historical_monthly, 
-            marker='o', 
-            label='Historical Sales (Last 12 Months)',
-            ax=ax
-        )
-        
-        # Forecast data
-        sns.lineplot(
-            x='Date', 
-            y='Predicted Sales', 
-            data=forecast_df, 
-            marker='o', 
-            color='red', 
-            label='Forecasted Sales',
-            ax=ax
-        )
-        
-        # Add vertical line to separate historical and forecast
-        ax.axvline(x=today, color='grey', linestyle='--')
-        
+
         # Customize title to include RAM and Memory
         title = f'Sales Forecast for {product_name}'
         if ram:
@@ -393,15 +315,7 @@ def sales_forecast():
         elif memory:
             title += f' ({memory})'
         
-        ax.set_title(title)
-        ax.set_xlabel('Date')
-        ax.set_ylabel('Sales')
-        
-        plt.tight_layout()
-        graph_image = plot_to_base64(fig)
-        
->>>>>>> f56f21470dc1d25eaa4e68c444738fb96c9d2ff2
-        # Calculate impact of external factors
+
         impact = {}
         feature_importances = dict(zip(feature_columns, model.feature_importances_))
         
@@ -470,7 +384,61 @@ def sales_forecast():
         return jsonify({"error": str(e)}), 500
 
 
-<<<<<<< HEAD
+# get the Product reviews from the API 
+@app.route('/get_product_reviews', methods=['GET'])
+def get_product_reviews():
+    product_query = request.args.get("q")
+    
+    if not product_query:
+        return jsonify({"error": "Missing 'q' parameter"}), 400
+
+    # Step 1: Search by product name using google_shopping
+    shopping_params = {
+        "engine": "google_shopping",
+        "q": product_query,
+        "gl": "us",
+        "hl": "en",
+        "api_key": API_KEY
+    }
+
+    shopping_search = GoogleSearch(shopping_params)
+    shopping_results = shopping_search.get_dict()
+
+    product_id = ""
+    results = shopping_results.get("shopping_results", [])
+    if not results:
+        return jsonify({"error": "No shopping results found"}), 404
+
+    product_id = results[0].get("product_id")
+    if not product_id:
+        return jsonify({"error": "Product ID not found"}), 404
+
+    # Step 2: Use product_id to get reviews
+    product_params = {
+        "engine": "google_product",
+        "product_id": product_id,
+        "reviews": "1",
+        "gl": "us",
+        "hl": "en",
+        "api_key": API_KEY
+    }
+
+    product_search = GoogleSearch(product_params)
+    product_results = product_search.get_dict()
+
+    reviews_data = product_results.get("reviews_results", {})
+    reviews = reviews_data.get("reviews", [])
+
+    review_list = [{"content": review.get("content")} for review in reviews]
+
+    return jsonify({
+        "query": product_query,
+        "product_id": product_id,
+        "reviews": review_list
+    })
+
+
+# Add a route to calculate the Market sentiment using Product reviews
 @app.route('/analyze_sentiment', methods=['POST'])
 def analyze_sentiment():
     # Get feedback from the request
@@ -487,27 +455,105 @@ def analyze_sentiment():
     return jsonify({'average_sentiment': round(average_sentiment, 2)})
 
 
-=======
->>>>>>> f56f21470dc1d25eaa4e68c444738fb96c9d2ff2
-# Add a route to check if the API is working
-@app.route('/', methods=['GET'])
-def index():
+
+# Add a route to calculate the competitor scores
+def get_own_product_info(product_name):
+    # Load your product data from the JSON file
+
+    with open("ml_model/data/products.json") as f:
+        data = json.load(f)
+    for product in data["products"]:
+        if product["name"].lower() == product_name.lower():
+            return product
+    return None
+
+def simplify_query(name):
+    """Reduce noise in product names for Google Trends."""
+    keywords = name.split()
+    filtered = [word for word in keywords if word.lower() not in ['for', 't-mobile', 'unlocked', '128gb', '256gb']]
+    return " ".join(filtered[:4])  # Keep first 3-4 main words
+
+def get_google_trend_score(product_name):
+    from serpapi import GoogleSearch
+    simplified_query = simplify_query(product_name)
+    print("Simplified query", simplified_query)
+    params = {
+        "engine": "google_trends",
+        "q": simplified_query,
+        "data_type": "TIMESERIES",
+        "api_key": API_KEY
+    }
+
+    search = GoogleSearch(params)
+    results = search.get_dict()
+    interest_over_time = results['interest_over_time']
+    timeline_data = interest_over_time['timeline_data']
+    print(timeline_data)
+    for values in timeline_data[:1]:
+        extracted_value = values['values'][0]['value']
+        return extracted_value
+
+
+def get_competitor_products(query):
+    params = {
+        "engine": "google_shopping",
+        "q": query,
+        "gl": "us",
+        "hl": "en",
+        "api_key": API_KEY
+    }
+    search = GoogleSearch(params)
+    results = search.get_dict()
+    return results.get("shopping_results", [])
+
+@app.route('/get_competitor_data', methods=['GET'])
+def get_competitor_data():
+    product_name = request.args.get("q")
+    if not product_name:
+        return jsonify({"error": "Missing 'q' parameter"}), 400
+
+    own_product = get_own_product_info(product_name)
+    if not own_product:
+        return jsonify({"error": "Product not found in your database"}), 404
+
+    competitor_candidates = get_competitor_products(product_name)
+    competitors = []
+
+    for result in competitor_candidates[:6]:  # limit to top 4 competitors
+        competitor_name = result.get("title")
+        raw_price = result.get("price")
+        source = result.get("source", "Unknown")
+
+        # Clean and extract price
+        if isinstance(raw_price, dict):
+            competitor_price = raw_price.get("extracted_value", 0)
+        elif isinstance(raw_price, str):
+            competitor_price = float(''.join(c for c in raw_price if c.isdigit() or c == '.'))
+        else:
+            competitor_price = 0
+
+        if competitor_name and competitor_price:
+            trend_score = get_google_trend_score(competitor_name)
+
+            # Try matching competitor name with your own product list
+            matched_product = get_own_product_info(competitor_name)
+            our_price = matched_product["price"] if matched_product else "Not available"
+
+            competitors.append({
+                "name": competitor_name,
+                "price": competitor_price,
+                "ourPrice": our_price,
+                "source": source,
+                "googleTrends": trend_score
+            })
+
     return jsonify({
-        "status": "API is running",
-<<<<<<< HEAD
+        "data": {
+            "competitors": competitors
+        }
     })
+
 
 if __name__ == '__main__':
     CORS(app, resources={r"/api/*": {"origins": "*"}})
-=======
-        "endpoints": [
-            "/sales-analysis-by-date", 
-            "/sales-analysis-by-product", 
-            "/sales-forecast"
-        ],
-        "dataset_info": "Using actual dataset with 13,000 rows"
-    })
-
-if __name__ == '__main__':
->>>>>>> f56f21470dc1d25eaa4e68c444738fb96c9d2ff2
     app.run(debug=True)

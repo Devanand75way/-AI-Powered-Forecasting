@@ -1,404 +1,609 @@
-# Import required libraries
 import pandas as pd
 import numpy as np
-from flask import Flask, request, jsonify
-import matplotlib.pyplot as plt
 from sklearn.ensemble import RandomForestRegressor
-from sklearn.preprocessing import StandardScaler, OneHotEncoder
-from sklearn.compose import ColumnTransformer
-from sklearn.pipeline import Pipeline
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
+import shap
+import matplotlib.pyplot as plt
+import joblib
+import os
+from flask import Flask, request, jsonify, render_template
 import io
 import base64
-from datetime import datetime
-import seaborn as sns
 
+import matplotlib
+matplotlib.use('Agg')
+
+# Create Flask app
 app = Flask(__name__)
 
-# Load and preprocess the data
-def load_data():
-    # In a real scenario, you'd load from a CSV or database
+# Make sure models directory exists
+os.makedirs('models', exist_ok=True)
+
+# Data preprocessing function with improved data type handling
+def preprocess_data(df):
+    """Preprocess the sales data for modeling with robust data type handling"""
+    # Make a copy to avoid modifying the original
+    df = df.copy()
+    
+    print("Original column data types:")
+    print(df.dtypes)
+    
+    # Convert date to datetime
     try:
-        df = pd.read_csv('New/preprocessed_smartphone_sales.csv')
-        
-        # Define consistent column names that will be used throughout the application
-        column_mapping = {
-            'Product Name': 'Product_Name',
-            'Units Sold': 'Units_Sold',
-            'Price': 'Price',
-            'Competitor Price': 'Competitor_Price',
-            'Stock Available': 'Stock_Available', 
-            'Marketing Spend': 'Marketing_Spend',
-            'Holiday/Seasonal Indicator': 'Holiday_Seasonal_Indicator',
-            'Weather Condition': 'Weather_Condition',
-            'Economic Indicator': 'Economic_Indicator',
-            'Social Media Trend Score': 'Social_Media_Trend_Score',
-            'Market Sentiment Score': 'Market_Sentiment_Score',
-            'Competitor Activity Score': 'Competitor_Activity_Score'
-        }
-        
-        # Rename columns that exist in the dataframe
-        for original_col, new_col in column_mapping.items():
-            if original_col in df.columns:
-                df.rename(columns={original_col: new_col}, inplace=True)
-        
-        # Convert date columns to datetime
-        df['Date'] = pd.to_datetime(df[['Year', 'Month', 'Day']])
-        
-        # Feature engineering
-        df['Month_Name'] = df['Date'].dt.month_name()
-        df['Week_of_Year'] = df['Date'].dt.isocalendar().week
-        df['Revenue'] = df['Units_Sold'] * df['Price']
-        
-        return df
+        df['date'] = pd.to_datetime(df['Date'], errors='coerce')
+    except KeyError:
+        try:
+            df['date'] = pd.to_datetime(df['date'], errors='coerce')
+        except KeyError:
+            print("No date column found. Creating a dummy date column.")
+            df['date'] = pd.to_datetime('today')
+    
+    # Extract date features
+    df['day'] = df['date'].dt.day
+    df['month'] = df['date'].dt.month
+    df['year'] = df['date'].dt.year
+    df['day_of_week'] = df['date'].dt.dayofweek
+    df['quarter'] = df['date'].dt.quarter
+    
+    # Handle categorical columns properly
+    categorical_cols = df.select_dtypes(include=['object', 'category']).columns.tolist()
+    categorical_cols = [col for col in categorical_cols if col not in ['Date', 'date']]
+    
+    print(f"Categorical columns to encode: {categorical_cols}")
+    
+    # Create a new DataFrame to build our features properly
+    processed_df = pd.DataFrame()
+    
+    # Process target variable first
+    target_col = 'Units Sold'
+    if target_col not in df.columns:
+        print(f"ERROR: Required column '{target_col}' not found in dataset")
+        raise ValueError(f"Required column '{target_col}' not found in dataset")
+    
+    # Convert target to numeric and handle NaN values
+    processed_df[target_col] = pd.to_numeric(df[target_col], errors='coerce')
+    
+    # Process numeric columns
+    numeric_cols = df.select_dtypes(include=['int64', 'float64']).columns.tolist()
+    numeric_cols = [col for col in numeric_cols if col != target_col]
+    
+    for col in numeric_cols:
+        processed_df[col] = pd.to_numeric(df[col], errors='coerce')
+    
+    # Handle categorical columns with one-hot encoding
+    if categorical_cols:
+        # Use pandas get_dummies with a prefix to avoid collisions
+        dummies = pd.get_dummies(df[categorical_cols], prefix=categorical_cols, drop_first=False)
+        processed_df = pd.concat([processed_df, dummies], axis=1)
+    
+    # Add date-derived features
+    processed_df['day'] = df['date'].dt.day
+    processed_df['month'] = df['date'].dt.month
+    processed_df['year'] = df['date'].dt.year
+    processed_df['day_of_week'] = df['date'].dt.dayofweek
+    processed_df['quarter'] = df['date'].dt.quarter
+    
+    # Fill NaN values
+    processed_df = processed_df.fillna(0)
+    
+    # Double-check all columns are numeric
+    for col in processed_df.columns:
+        if not np.issubdtype(processed_df[col].dtype, np.number):
+            print(f"WARNING: Column {col} is not numeric: {processed_df[col].dtype}")
+            processed_df[col] = pd.to_numeric(processed_df[col], errors='coerce').fillna(0)
+    
+    # Drop rows with NaN in target variable
+    processed_df = processed_df.dropna(subset=[target_col])
+    
+    # Print final data types
+    print("Processed column data types:")
+    print(processed_df.dtypes)
+    
+    # Prepare features and target
+    X = processed_df.drop([target_col], axis=1)
+    y = processed_df[target_col]
+    
+    print(f"Final X data types after preprocessing:")
+    print(X.dtypes.value_counts())
+    
+    # Explicitly convert X to float64 to ensure compatibility with SHAP
+    X = X.astype(np.float64)
+    
+    print("Everything is good - data preprocessed successfully")
+    return X, y
+
+
+# Train the Random Forest model with safety checks
+def train_model(X, y):
+    """Train the Random Forest sales prediction model with safety checks"""
+    print("Starting model training...")
+    print(f"Input shape — X: {X.shape}, y: {y.shape}")
+    
+    # Handle object-type columns safely
+    for col in X.columns:
+        if X[col].dtype == 'object':
+            try:
+                X[col] = X[col].astype(np.float64)
+                print(f" Converted column '{col}' to float64.")
+            except ValueError:
+                print(f"Cannot convert column '{col}' to float64. Consider encoding.")
+                raise
+    
+    # Split the dataset
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.3, random_state=42)
+    print(f"Train shape: {X_train.shape}, Test shape: {X_test.shape}")
+    
+    # Final dtype check
+    if X_train.dtypes.apply(lambda dt: dt == 'object').any():
+        print("Object-type columns still exist. Forcing full DataFrame conversion to float.")
+        try:
+            X_train = X_train.astype(np.float64)
+            X_test = X_test.astype(np.float64)
+        except Exception as e:
+            print(f"Conversion failed: {str(e)}")
+            raise
+
+    # Train the model
+    print("🌲 Training RandomForestRegressor...")
+    model = RandomForestRegressor(n_estimators=300, random_state=42)
+    model.fit(X_train, y_train)
+    print("Model training completed.")
+    
+    # Evaluate model
+    y_pred = model.predict(X_test)
+    metrics = {
+        'mae': mean_absolute_error(y_test, y_pred),
+        'rmse': np.sqrt(mean_squared_error(y_test, y_pred)),
+        'r2': r2_score(y_test, y_pred)
+    }
+    print(f"Evaluation — MAE: {metrics['mae']:.4f}, RMSE: {metrics['rmse']:.4f}, R²: {metrics['r2']:.4f}")
+    
+    # SHAP explainer
+    print("Creating SHAP explainer...")
+    explainer = None
+    X_sample = X_train.iloc[:1000].astype(np.float64)
+
+    try:
+        explainer = shap.Explainer(model, X_sample)
+        print("SHAP explainer (auto) created.")
     except Exception as e:
-        print(f"Error loading data: {e}")
+        print(f"shap.Explainer failed: {str(e)}")
+        print("Trying shap.TreeExplainer...")
+        try:
+            explainer = shap.TreeExplainer(model)
+            print("SHAP TreeExplainer created.")
+        except Exception as e:
+            print(f"SHAP fallback failed: {str(e)}")
+    
+    return model, explainer, X_test, metrics
+
+# Generate insights based on feature importance (fallback when SHAP is unavailable)
+def generate_insights_from_importance(feature_importance, prediction, input_data):
+    """Generate business insights based on feature importance when SHAP is unavailable"""
+    insights = []
+    recommendations = []
+    
+    # Get top factors
+    top_features = feature_importance.head(6)['Feature'].tolist()
+    
+    insights.append(f"Predicted Units Sold: {prediction:.2f}")
+    
+    # Check for price-related features
+    price_features = [f for f in top_features if 'Price' in f and 'Competitor' not in f]
+    competitor_price_features = [f for f in top_features if 'Competitor Price' in f]
+    
+    if price_features and competitor_price_features:
+        price_feature = price_features[0]
+        competitor_price_feature = competitor_price_features[0]
+        
+        price_value = input_data[price_feature].values[0] if price_feature in input_data.columns else 0
+        competitor_price = input_data[competitor_price_feature].values[0] if competitor_price_feature in input_data.columns else 0
+        
+        if price_value > competitor_price:
+            recommendations.append(f"Consider reducing price from ${price_value:.2f} to be more competitive with ${competitor_price:.2f}")
+        else:
+            recommendations.append(f"Price positioning is good (${price_value:.2f} vs competitor ${competitor_price:.2f})")
+    
+    # Check for discount features
+    discount_features = [f for f in top_features if 'Discount' in f]
+    if discount_features:
+        discount_feature = discount_features[0]
+        current_discount = input_data[discount_feature].values[0] if discount_feature in input_data.columns else 0
+        
+        if current_discount < 15:
+            recommendations.append(f"Consider increasing discount from {current_discount:.1f}% to improve sales")
+        elif current_discount > 30:
+            recommendations.append(f"Current discount of {current_discount:.1f}% may be too high, consider value-based promotions instead")
+    
+    # Check for marketing features
+    marketing_features = [f for f in top_features if 'Marketing' in f]
+    if marketing_features:
+        marketing_feature = marketing_features[0]
+        marketing_spend = input_data[marketing_feature].values[0] if marketing_feature in input_data.columns else 0
+        
+        recommendations.append(f"Marketing is influential - optimize current spend of ${marketing_spend:.2f}")
+    
+    # Check for social media features
+    social_features = [f for f in top_features if 'Social Media' in f]
+    if social_features:
+        recommendations.append("Social media presence is important - focus on increasing engagement")
+    
+    # Check for stock features
+    stock_features = [f for f in top_features if 'Stock' in f]
+    if stock_features:
+        stock_feature = stock_features[0]
+        stock_value = input_data[stock_feature].values[0] if stock_feature in input_data.columns else 0
+        
+        if stock_value < 100:
+            recommendations.append(f"Low stock level ({stock_value:.0f} units) may be limiting sales potential")
+    
+    # If we don't have enough recommendations, add a general one
+    if len(recommendations) < 3:
+        recommendations.append("Review seasonal marketing strategies to improve sales during this period")
+    
+    return insights, recommendations
+
+# Generate SHAP summary plot safely
+# Modify the generate_shap_plot function to avoid multiprocessing issues
+def generate_shap_plot(explainer, X_test):
+    """Generate SHAP summary plot with error handling"""
+    if explainer is None:
         return None
-# Function to generate plots as base64 encoded images
-def get_plot_as_base64(fig):
-    buf = io.BytesIO()
-    fig.savefig(buf, format='png')
-    buf.seek(0)
-    img_str = base64.b64encode(buf.read()).decode('utf-8')
-    buf.close()
-    return img_str
-
-@app.route('/api/sales-analysis-by-date', methods=['POST'])
-def sales_analysis_by_date():
-    """
-    Endpoint for Past Sales Analysis by Date Interval
     
-    Expected input:
-    {
-        "start_date": "YYYY-MM-DD",
-        "end_date": "YYYY-MM-DD"
-    }
-    """
     try:
-        data = request.get_json()
-        start_date = pd.to_datetime(data['start_date'])
-        end_date = pd.to_datetime(data['end_date'])
+        # Set matplotlib to use Agg backend to avoid GUI issues
+        import matplotlib
+        matplotlib.use('Agg')
         
-        # Load data
-        df = load_data()
-        if df is None:
-            return jsonify({"error": "Failed to load data"}), 500
-        # print("df", df)
-        # Filter data for date range
-        date_filtered_df = df[(df['Date'] >= start_date) & (df['Date'] <= end_date)]
+        plt.figure(figsize=(10, 6))
+        # Limit sample size and ensure proper types
+        X_sample = X_test.astype(np.float64).iloc[:50]  # Reduced sample size
+        shap_values = explainer(X_sample)
         
-        if len(date_filtered_df) == 0:
-            return jsonify({"error": "No data found for the specified date range"}), 404
+        # Use threading lock if needed
+        shap.summary_plot(shap_values, X_sample, show=False)
+        plt.tight_layout()
         
-        # Calculate total sales per product
-        product_sales = date_filtered_df.groupby('Product_Name').agg({
-            'Units_Sold': 'sum',
-            'Revenue': 'sum'
-        }).reset_index()
+        # Convert plot to base64 string
+        buffer = io.BytesIO()
+        plt.savefig(buffer, format='png', bbox_inches='tight')
+        buffer.seek(0)
+        plot_data = base64.b64encode(buffer.getvalue()).decode()
+        plt.close('all')
         
-        # Monthly sales trends
-        monthly_sales = date_filtered_df.groupby(['Year', 'Month']).agg({
-            'Units_Sold': 'sum',
-            'Revenue': 'sum'
-        }).reset_index()
-        
-        # Find best and worst performing months
-        monthly_sales['YearMonth'] = monthly_sales['Year'].astype(str) + '-' + monthly_sales['Month'].astype(str).str.zfill(2)
-        best_month = monthly_sales.loc[monthly_sales['Revenue'].idxmax()]
-        worst_month = monthly_sales.loc[monthly_sales['Revenue'].idxmin()]
-        
-        # # Create visualizations
-        # plt.figure(figsize=(12, 8))
-        
-        # # Monthly sales trend visualization
-        # plt.subplot(2, 1, 1)
-        # plt.plot(monthly_sales['YearMonth'], monthly_sales['Revenue'], marker='o')
-        # plt.title('Monthly Sales Revenue')
-        # plt.xticks(rotation=45)
-        # plt.tight_layout()
-        
-        # # Product sales comparison
-        # plt.subplot(2, 1, 2)
-        # product_sales = product_sales.sort_values('Revenue', ascending=False)
-        # plt.bar(product_sales['Product_Name'], product_sales['Revenue'])
-        # plt.title('Total Revenue by Product')
-        # plt.xticks(rotation=45)
-        # plt.tight_layout()
-        
-        # # Convert plot to base64
-        # sales_trend_img = get_plot_as_base64(plt.gcf())
-        # plt.close()
-        
-        response = {
-            "total_sales_by_product": product_sales.to_dict(orient='records'),
-            "monthly_sales_trends": monthly_sales.to_dict(orient='records'),
-            "best_performing_month": {
-                "year": int(best_month['Year']),
-                "month": int(best_month['Month']),
-                "revenue": float(best_month['Revenue']),
-                "units_sold": int(best_month['Units_Sold'])
-            },
-            "worst_performing_month": {
-                "year": int(worst_month['Year']),
-                "month": int(worst_month['Month']),
-                "revenue": float(worst_month['Revenue']),
-                "units_sold": int(worst_month['Units_Sold'])
-            },
-            # "visualization": sales_trend_img
-        }
-        
-        return jsonify(response)
-    
+        return plot_data
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        print(f"Error generating SHAP plot: {str(e)}")
+        plt.close('all')
+        return None
 
-@app.route('/api/sales-analysis-by-product', methods=['POST'])
-def sales_analysis_by_product():
-    """
-    Endpoint for Past Sales Report by Product Name
+# Explain prediction with SHAP values or feature importance
+def explain_prediction(model, explainer, input_data):
+    """Generate prediction and explanation with fallback to feature importance"""
+    # Make prediction
+    prediction = model.predict(input_data)[0]
     
-    Expected input:
-    {
-        "product_name": "Product XYZ"
-    }
-    """
-    try:
-        data = request.get_json()
-        product_name = data['product_name']
-        print("Product name: {}".format(product_name))
-        # Load data
-        df = load_data()
-        if df is None:
-            return jsonify({"error": "Failed to load data"}), 500
-        
-        # Filter data for the specific product
-        product_df = df[df['Product_Name'] == product_name]
-        
-        if len(product_df) == 0:
-            return jsonify({"error": f"No data found for product: {product_name}"}), 404
-        
-        # Calculate monthly sales for the product
-        monthly_product_sales = product_df.groupby(['Year', 'Month', 'Month_Name']).agg({
-            'Units_Sold': 'sum',
-            'Revenue': 'sum'
-        }).reset_index()
-        
-        monthly_product_sales['YearMonth'] = monthly_product_sales['Year'].astype(str) + '-' + monthly_product_sales['Month'].astype(str).str.zfill(2)
-        
-        # Find best selling months for this product
-        best_months = monthly_product_sales.nlargest(3, 'Units_Sold')
-        
-        # Create visualization
-        # plt.figure(figsize=(12, 6))
-        
-        # plt.subplot(1, 1, 1)
-        # plt.plot(monthly_product_sales['YearMonth'], monthly_product_sales['Units Sold'], marker='o')
-        # plt.title(f'Sales Trend Over Time for {product_name}')
-        # plt.xlabel('Month')
-        # plt.ylabel('Units Sold')
-        # plt.xticks(rotation=45)
-        # plt.tight_layout()
-        
-        # product_trend_img = get_plot_as_base64(plt.gcf())
-        # plt.close()
-        
-        response = {
-            "product_name": product_name,
-            "sales_over_time": monthly_product_sales.to_dict(orient='records'),
-            "best_selling_months": best_months.to_dict(orient='records'),
-            # "visualization": product_trend_img
-        }
-        
-        return jsonify(response)
+    # Get feature importance
+    feature_importance = pd.DataFrame({
+        'Feature': input_data.columns,
+        'Importance': model.feature_importances_
+    }).sort_values('Importance', ascending=False)
     
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-@app.route('/api/sales-forecast', methods=['POST'])
-def sales_forecast():
-    """
-    Endpoint for Future Sales Forecasting
-    
-    Expected input:
-    {
-        "product_name": "Product01",  # The specific product to forecast
-        "start_date": "2023-04-01",   # Start date for forecast
-        "end_date": "2023-08-01",     # End date for forecast
-        "external_factors": {
-            "competitor_activity": 0.7,
-            "weather_condition": 0.8,
-            "market_sentiment": 0.6,
-            "holiday_indicator": 1  # 1 for holiday period, 0 for non-holiday
-        }
-    }
-    """
-    try:
-        data = request.get_json()
-        product_name = data.get('product_name')
-        start_date = pd.to_datetime(data.get('start_date'))
-        end_date = pd.to_datetime(data.get('end_date'))
-        external_factors = data.get('external_factors', {})
-        
-        # Validate input
-        if not product_name:
-            return jsonify({"error": "Product name is required"}), 400
-        if not start_date or not end_date:
-            return jsonify({"error": "Both start_date and end_date are required"}), 400
-        if start_date >= end_date:
-            return jsonify({"error": "end_date must be after start_date"}), 400
-        
-        # Load data
-        df = load_data()
-        if df is None:
-            return jsonify({"error": "Failed to load data"}), 500
-        
-        # Rename columns to match the actual dataset columns
-        # This is crucial - match the exact column names from your dataset
-        column_mapping = {
-            'Product Name': 'Product_Name',
-            'Units Sold': 'Units_Sold',
-            'Price': 'Price',
-            'Competitor Price': 'Competitor_Price',
-            'Stock Available': 'Stock_Available', 
-            'Marketing Spend': 'Marketing_Spend',
-            'Holiday/Seasonal Indicator': 'Holiday_Seasonal_Indicator',
-            'Weather Condition': 'Weather_Condition',
-            'Economic Indicator': 'Economic_Indicator',
-            'Social Media Trend Score': 'Social_Media_Trend_Score',
-            'Market Sentiment Score': 'Market_Sentiment_Score',
-            'Competitor Activity Score': 'Competitor_Activity_Score'
-        }
-        
-        # Rename columns if they exist in the dataframe
-        for original_col, new_col in column_mapping.items():
-            if original_col in df.columns:
-                df.rename(columns={original_col: new_col}, inplace=True)
-        
-        # Check if product exists in the dataset
-        if product_name not in df['Product_Name'].unique():
-            return jsonify({"error": f"Product '{product_name}' not found in dataset"}), 404
-        
-        # Filter data for the specific product
-        product_df = df[df['Product_Name'] == product_name].sort_values('Date')
-        
-        # Prepare the training data
-        # Define features for the model - use the renamed columns
-        numeric_features = ['Price', 'Competitor_Price', 'Stock_Available', 'Marketing_Spend', 
-                           'Weather_Condition', 'Economic_Indicator', 'Social_Media_Trend_Score',
-                           'Market_Sentiment_Score', 'Competitor_Activity_Score', 'Month', 'Weekday']
-        
-        categorical_features = ['Holiday_Seasonal_Indicator']
-        
-        # Verify all features exist in the dataframe
-        missing_features = [col for col in numeric_features + categorical_features if col not in product_df.columns]
-        if missing_features:
-            return jsonify({"error": f"Missing columns in dataset: {missing_features}"}), 500
-        
-        # Create the preprocessing pipeline
-        preprocessor = ColumnTransformer(
-            transformers=[
-                ('num', StandardScaler(), numeric_features),
-                ('cat', OneHotEncoder(), categorical_features)
-            ])
-        
-        X = product_df[numeric_features + categorical_features]
-        y = product_df['Units_Sold']
-        
-        # Create and train the model
-        model = Pipeline(steps=[
-            ('preprocessor', preprocessor),
-            ('regressor', RandomForestRegressor(random_state=42))
-        ])
-        
-        model.fit(X, y)
-        
-        # Generate dates for forecast period
-        forecast_dates = pd.date_range(start=start_date, end=end_date, freq='MS')
-        
-        # Create a dataframe for forecast periods
-        forecast_records = []
-        
-        # Use the last record as a template
-        last_record = product_df.iloc[-1].copy()
-        
-        for forecast_date in forecast_dates:
-            forecast_record = last_record.copy()
-            forecast_record['Date'] = forecast_date
-            forecast_record['Year'] = forecast_date.year
-            forecast_record['Month'] = forecast_date.month
-            forecast_record['Day'] = 1
-            forecast_record['Weekday'] = forecast_date.weekday()
+    # Try to use SHAP if available
+    if explainer is not None:
+        try:
+            # Use Agg backend
+            import matplotlib
+            matplotlib.use('Agg')
             
-            # Update with any provided external factors
-            if 'competitor_activity' in external_factors:
-                forecast_record['Competitor_Activity_Score'] = external_factors['competitor_activity']
-            if 'weather_condition' in external_factors:
-                forecast_record['Weather_Condition'] = external_factors['weather_condition']
-            if 'market_sentiment' in external_factors:
-                forecast_record['Market_Sentiment_Score'] = external_factors['market_sentiment']
-            if 'holiday_indicator' in external_factors:
-                forecast_record['Holiday_Seasonal_Indicator'] = external_factors['holiday_indicator']
+            # Calculate SHAP values
+            shap_values = explainer(input_data.astype(np.float64))
             
-            forecast_records.append(forecast_record)
+            # Get SHAP values for this prediction
+            shap_df = pd.DataFrame({
+                'Feature': input_data.columns,
+                'SHAP Value': shap_values.values[0, :]
+            }).sort_values('SHAP Value', key=abs, ascending=False)
+            
+            # Generate insights and recommendations
+            insights, recommendations = generate_insights(shap_df, prediction, input_data)
+            
+            # Generate feature impact plot
+            plt.figure(figsize=(10, 6))
+            shap.bar_plot(shap_values[0], feature_names=input_data.columns.tolist(), show=False)
+            plt.tight_layout()
+            
+            # Convert plot to base64
+            buffer = io.BytesIO()
+            plt.savefig(buffer, format='png', bbox_inches='tight')
+            buffer.seek(0)
+            impact_plot = base64.b64encode(buffer.getvalue()).decode()
+            plt.close('all')  # Close all figures, not just current one
+            
+            return prediction, shap_df, feature_importance, insights, recommendations, impact_plot
+        except Exception as e:
+            print(f"Error using SHAP explainer: {str(e)}")
+            print("Falling back to feature importance...")
+            plt.close('all')  # Ensure plot resources are freed
+    
+    # Fallback to feature importance
+    insights, recommendations = generate_insights_from_importance(feature_importance, prediction, input_data)
+    
+    # Generate simple feature importance plot with Agg backend
+    import matplotlib
+    matplotlib.use('Agg')
+    plt.figure(figsize=(10, 6))
+    feature_importance.head(15).plot(kind='barh', x='Feature', y='Importance', legend=False)
+    plt.title('Top 15 Feature Importance')
+    plt.tight_layout()
+    
+    # Convert plot to base64
+    buffer = io.BytesIO()
+    plt.savefig(buffer, format='png', bbox_inches='tight')
+    buffer.seek(0)
+    impact_plot = base64.b64encode(buffer.getvalue()).decode()
+    plt.close('all')  # Close all figures
+    
+    # Create a placeholder SHAP df with feature importance values
+    shap_df = pd.DataFrame({
+        'Feature': feature_importance['Feature'],
+        'SHAP Value': feature_importance['Importance']  # Using importance as placeholder
+    }).head(10)
+    
+    return prediction, shap_df, feature_importance, insights, recommendations, impact_plot
+
+
+# Flask routes
+@app.route('/train', methods=['POST'])
+def train_endpoint():
+    """Endpoint to train the model with local dataset"""
+    try:
+        # Read the CSV file from a fixed local path
+        filepath = "New/processed_smartphone_sales_with_discount.csv"  # Change this to your actual filename
+        print(f"Reading CSV file from: {filepath}")
         
-        forecast_df = pd.DataFrame(forecast_records)
+        # Read the dataset
+        df = pd.read_csv(filepath)
+        print(f"Dataset loaded successfully with {len(df)} rows and {len(df.columns)} columns")
+        print(f"Sample columns: {df.columns[:5].tolist()}...")
         
-        # Make predictions
-        X_forecast = forecast_df[numeric_features + categorical_features]
-        forecast_df['Predicted_Units'] = model.predict(X_forecast)
+        # Print sample data for debugging
+        print("Sample data:")
+        print(df.head(2))
         
-        # Calculate feature importance
-        feature_importance = model.named_steps['regressor'].feature_importances_
+        # Preprocess data
+        try:
+            X, y = preprocess_data(df)
+            print(f"Data preprocessed successfully: X shape={X.shape}, y shape={y.shape}")
+        except Exception as e:
+            print(f"Error during preprocessing: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            return jsonify({'error': f'Error during data preprocessing: {str(e)}'}), 500
         
-        # Getting the feature names after one-hot encoding
-        preprocessor_features = numeric_features + list(model.named_steps['preprocessor'].transformers_[1][1].get_feature_names_out(['Holiday_Seasonal_Indicator']))
+        # Train model
+        try:
+            model, explainer, X_test, metrics = train_model(X, y)
+            print("Model trained successfully")
+        except Exception as e:
+            print(f"Error during model training: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            return jsonify({'error': f'Error during model training: {str(e)}'}), 500
         
-        # Create a dataframe of feature importances
-        importance_df = pd.DataFrame({
-            'Feature': preprocessor_features,
-            'Importance': feature_importance
-        }).sort_values('Importance', ascending=False)
+        # Save model and explainer
+        try:
+            joblib.dump(model, 'models/sales_forecast_model.pkl')
+            if explainer is not None:
+                joblib.dump(explainer, 'models/sales_forecast_explainer.pkl')
+                print("Model and explainer saved successfully")
+            else:
+                print("Model saved successfully (explainer not available)")
+        except Exception as e:
+            print(f"Error saving model: {str(e)}")
+            return jsonify({'error': f'Error saving model: {str(e)}'}), 500
         
-        # Create visualization
-        # plt.figure(figsize=(12, 6))
+        # Generate SHAP summary plot
+        try:
+            plot_data = generate_shap_plot(explainer, X_test) if explainer is not None else None
+            if plot_data:
+                print("Plot generated successfully")
+            else:
+                print("No plot generated (explainer not available)")
+        except Exception as e:
+            print(f"Error generating plot: {str(e)}")
+            plot_data = None
         
-        # # Plot historical data (last 12 months or all if less) for comparison
-        # historical = product_df.tail(min(12, len(product_df)))
-        
-        # plt.plot(historical['Date'], historical['Units_Sold'], 
-        #          marker='o', label=f'Historical ({product_name})')
-        
-        # plt.plot(forecast_df['Date'], forecast_df['Predicted_Units'], 
-        #          marker='x', linestyle='--', label=f'Predicted ({product_name})')
-        
-        # plt.title(f'Sales Forecast for {product_name}')
-        # plt.xlabel('Month')
-        # plt.ylabel('Units Sold')
-        # plt.legend()
-        # plt.xticks(rotation=45)
-        # plt.tight_layout()
-        
-        # forecast_img = get_plot_as_base64(plt.gcf())
-        # plt.close()
-        
-        # Format dates for nicer output
-        forecast_df['Date'] = forecast_df['Date'].dt.strftime('%Y-%m-%d')
-        
-        response = {
-            'product_name': product_name,
-            'forecast_period': {
-                'start_date': start_date.strftime('%Y-%m-%d'),
-                'end_date': end_date.strftime('%Y-%m-%d'),
-                'number_of_months': len(forecast_dates)
+        # Return success
+        return jsonify({
+            'status': 'success',
+            'message': 'Model trained successfully',
+            'metrics': {
+                'mae': float(metrics['mae']),
+                'rmse': float(metrics['rmse']),
+                'r2': float(metrics['r2'])
             },
-            'forecast': forecast_df[['Date', 'Predicted_Units']].to_dict(orient='records'),
-            'factor_impact': importance_df.head(5).to_dict(orient='records'), 
-            # 'visualization': forecast_img
-        }
-        
-        return jsonify(response)
+            'features': X.columns.tolist(),
+            'shap_plot': plot_data
+        })
     
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/predict', methods=['POST'])
+def predict_endpoint():
+    """Endpoint for making predictions with explanations"""
+    try:
+        # Get input data
+        data = request.json
+        
+        # Convert to dataframe
+        input_df = pd.DataFrame([data])
+        
+        # Process date if present
+        if 'date' in input_df.columns or 'Date' in input_df.columns:
+            date_col = 'date' if 'date' in input_df.columns else 'Date'
+            input_df['date'] = pd.to_datetime(input_df[date_col], errors='coerce')
+            
+            # Extract date features
+            input_df['day'] = input_df['date'].dt.day
+            input_df['month'] = input_df['date'].dt.month
+            input_df['year'] = input_df['date'].dt.year
+            input_df['day_of_week'] = input_df['date'].dt.dayofweek
+            input_df['quarter'] = input_df['date'].dt.quarter
+            
+            # Remove date column
+            input_df = input_df.drop(['date'], axis=1)
+            if date_col in input_df.columns:
+                input_df = input_df.drop([date_col], axis=1)
+        
+        # Convert all columns to float64 for consistency
+        for col in input_df.columns:
+            input_df[col] = pd.to_numeric(input_df[col], errors='coerce').fillna(0)
+        
+        # Load model and explainer
+        try:
+            model = joblib.load('models/sales_forecast_model.pkl')
+            try:
+                explainer = joblib.load('models/sales_forecast_explainer.pkl')
+            except FileNotFoundError:
+                print("Explainer not found, will use feature importance instead")
+                explainer = None
+        except FileNotFoundError:
+            return jsonify({'error': 'Model not found. Please train the model first.'}), 404
+        
+        # Ensure input data has all required columns
+        missing_cols = set(model.feature_names_in_) - set(input_df.columns)
+        for col in missing_cols:
+            input_df[col] = 0
+        
+        # Remove any extra columns
+        extra_cols = set(input_df.columns) - set(model.feature_names_in_)
+        if extra_cols:
+            input_df = input_df.drop(columns=extra_cols)
+            
+        # Reorder columns to match model
+        input_df = input_df[model.feature_names_in_]
+        
+        # Ensure all data is float64
+        input_df = input_df.astype(np.float64)
+        
+        # Get prediction and explanation
+        prediction, shap_df, feature_importance, insights, recommendations, impact_plot = explain_prediction(model, explainer, input_df)
+        
+        # Return results
+        return jsonify({
+            'prediction': {
+                'units_sold': float(prediction),
+            },
+            'explanations': {
+                'top_factors': shap_df.head(10).to_dict(orient='records'),
+                'feature_importance': feature_importance.head(10).to_dict(orient='records'),
+                'insights': insights,
+                'recommendations': recommendations,
+                # 'impact_plot': impact_plot
+            }
+        })
     
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+# Generate insights based on SHAP values
+def generate_insights(shap_df, prediction, input_data):
+    """Generate business insights based on SHAP values"""
+    insights = []
+    recommendations = []
+    
+    # Get top positive and negative factors
+    positive_factors = shap_df[shap_df['SHAP Value'] > 0].sort_values('SHAP Value', ascending=False).head(3)
+    negative_factors = shap_df[shap_df['SHAP Value'] < 0].sort_values('SHAP Value', ascending=True).head(3)
+    
+    insights.append(f"Predicted Units Sold: {prediction:.2f}")
+    
+    # Process price features
+    price_features = [f for f in shap_df['Feature'] if 'Price' in f and 'Competitor' not in f]
+    competitor_price_features = [f for f in shap_df['Feature'] if 'Competitor Price' in f]
+    
+    if price_features and competitor_price_features:
+        price_feature = price_features[0]
+        competitor_price_feature = competitor_price_features[0]
+        
+        price_value = input_data[price_feature].values[0] if price_feature in input_data.columns else 0
+        competitor_price = input_data[competitor_price_feature].values[0] if competitor_price_feature in input_data.columns else 0
+        
+        price_impact = shap_df[shap_df['Feature'] == price_feature]['SHAP Value'].values[0] if price_feature in shap_df['Feature'].values else 0
+        
+        if price_impact < 0 and price_value > competitor_price:
+            # Current price is higher than competitor and negatively impacting sales
+            optimal_price = competitor_price * 0.97  # Slightly less than competitor
+            recommendations.append(f"Consider reducing price from ${price_value:.2f} to ${optimal_price:.2f} (slightly below competitor's ${competitor_price:.2f})")
+        elif price_impact < 0 and price_value <= competitor_price:
+            # Price is already competitive but still negatively impacting sales
+            recommendations.append(f"Current price (${price_value:.2f}) seems competitive compared to competitors (${competitor_price:.2f}). Consider bundle deals instead of price reductions.")
+    
+    # Process discount features
+    discount_features = [f for f in shap_df['Feature'] if 'Discount' in f]
+    if discount_features:
+        discount_feature = discount_features[0]
+        discount_impact = shap_df[shap_df['Feature'] == discount_feature]['SHAP Value'].values[0] if discount_feature in shap_df['Feature'].values else 0
+        current_discount = input_data[discount_feature].values[0] if discount_feature in input_data.columns else 0
+        
+        if discount_impact > 0:
+            # Discount is positively impacting sales
+            optimal_discount = min(current_discount + 5, 35)  # Increase discount but cap at 35%
+            recommendations.append(f"Increase discount from {current_discount:.1f}% to {optimal_discount:.1f}% to boost sales further")
+        elif discount_impact < 0 and current_discount > 10:
+            # Discount is negatively impacting sales (might indicate quality perception issues)
+            recommendations.append("Current discount strategy isn't working effectively. Consider premium positioning instead")
+    
+    # Process marketing features
+    marketing_features = [f for f in shap_df['Feature'] if 'Marketing' in f]
+    if marketing_features:
+        marketing_feature = marketing_features[0]
+        marketing_impact = shap_df[shap_df['Feature'] == marketing_feature]['SHAP Value'].values[0] if marketing_feature in shap_df['Feature'].values else 0
+        marketing_spend = input_data[marketing_feature].values[0] if marketing_feature in input_data.columns else 0
+        
+        if marketing_impact > 0:
+            # Marketing is working
+            recommendations.append(f"Current marketing strategy is effective. Consider increasing budget by 15% from ${marketing_spend:.2f}")
+        elif marketing_impact < 0:
+            # Marketing isn't effective
+            recommendations.append("Current marketing approach isn't driving sales. Review marketing channels")
+    
+    # Process social media features
+    social_features = [f for f in shap_df['Feature'] if 'Social Media' in f]
+    if social_features:
+        social_feature = social_features[0]
+        social_impact = shap_df[shap_df['Feature'] == social_feature]['SHAP Value'].values[0] if social_feature in shap_df['Feature'].values else 0
+        social_score = input_data[social_feature].values[0] if social_feature in input_data.columns else 0
+        
+        if social_impact > 0:
+            recommendations.append("Social media engagement is positively influencing sales. Increase activity")
+        elif social_impact < 0 and social_score > 0:
+            recommendations.append("Current social media approach may be creating negative sentiment. Review strategy")
+    
+    # Process stock features
+    stock_features = [f for f in shap_df['Feature'] if 'Stock' in f]
+    if stock_features:
+        stock_feature = stock_features[0]
+        stock_impact = shap_df[shap_df['Feature'] == stock_feature]['SHAP Value'].values[0] if stock_feature in shap_df['Feature'].values else 0
+        stock_value = input_data[stock_feature].values[0] if stock_feature in input_data.columns else 0
+        
+        if stock_impact > 0 and stock_value < 100:
+            recommendations.append(f"Low stock level ({stock_value:.0f} units) may be limiting sales. Increase inventory")
+    
+    # If we don't have enough recommendations, add a general one
+    if len(recommendations) < 3:
+        recommendations.append("Optimize seasonal marketing strategies to improve sales during this period")
+    
+    return insights, recommendations
+
+
+# Run the app
 if __name__ == '__main__':
-    app.run(debug=True)
+    app.run(debug=True, port=5000, threaded=True)

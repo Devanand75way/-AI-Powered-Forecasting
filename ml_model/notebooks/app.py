@@ -18,7 +18,7 @@ app = Flask(__name__)
 CORS(app)
 
 sales_data  = pd.read_csv('ml_model/data/smartphone_sales_updated.csv')
-API_KEY = "54689b480842147086ac6f6b033f096ff9a76197e528284d3ee8cbb66e1de587"
+API_KEY = "4465ed83b7aca9208cbab70e152493e8fdddd8646ac4ffab2b690e575229402e"
 
 
 # Load the actual dataset
@@ -37,16 +37,6 @@ def load_dataset():
     df['Date'] = pd.to_datetime(df['Date'])
     
     return df
-
-# Function to convert plot to base64 string for API response
-def plot_to_base64(fig):
-    buf = BytesIO()
-    fig.savefig(buf, format='png', bbox_inches='tight')
-    buf.seek(0)
-    img_str = base64.b64encode(buf.read()).decode('utf-8')
-    buf.close()
-    plt.close(fig)
-    return img_str
 
 # Helper function to get product name from one-hot encoded columns
 def get_product_name(row):
@@ -455,7 +445,6 @@ def analyze_sentiment():
     return jsonify({'average_sentiment': round(average_sentiment, 2)})
 
 
-
 # Add a route to calculate the competitor scores
 def get_own_product_info(product_name):
     # Load your product data from the JSON file
@@ -519,7 +508,7 @@ def get_competitor_data():
     competitor_candidates = get_competitor_products(product_name)
     competitors = []
 
-    for result in competitor_candidates[:6]:  # limit to top 4 competitors
+    for result in competitor_candidates[:4]:  # limit to top 4 competitors
         competitor_name = result.get("title")
         raw_price = result.get("price")
         source = result.get("source", "Unknown")
